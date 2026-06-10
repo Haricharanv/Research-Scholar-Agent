@@ -1,0 +1,41 @@
+# ──────────────────────────────────────────────
+# Research Scholar Agent — Git Ignore
+# ──────────────────────────────────────────────
+
+# Sensitive credentials (DO NOT SHARE OR COMMIT!)
+backend/.env
+
+# Python Virtual Environments
+backend/acvenv/
+backend/venv/
+backend/venv4/
+backend/testenv/
+**/acvenv/
+**/venv/
+**/venv4/
+**/testenv/
+
+# Python compiled cache
+**/__pycache__/
+*.py[cod]
+*$py.class
+
+# Node.js dependencies
+frontend/node_modules/
+**/node_modules/
+
+# Production build artifacts
+frontend/dist/
+frontend/dist-ssr/
+
+# Vector database storage & temporary papers
+backend/papers/*
+!backend/papers/.gitkeep
+backend/faiss_index/
+backend/faiss_meta.json
+
+# Local development files & editor configurations
+.vscode/
+.idea/
+.DS_Store
+*.log
