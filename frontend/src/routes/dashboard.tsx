@@ -17,7 +17,6 @@ const PROVIDER_META: Record<string, { icon: typeof Zap; label: string; color: st
   groq:       { icon: Zap,      label: 'Groq',            color: 'text-amber-400',   desc: 'Ultra-fast inference (free)' },
   gemini:     { icon: Sparkles, label: 'Google Gemini',    color: 'text-blue-400',    desc: 'Multimodal AI (free tier)' },
   openrouter: { icon: Globe,    label: 'OpenRouter',       color: 'text-purple-400',  desc: 'Multi-model gateway (free models)' },
-  ollama:     { icon: Cpu,      label: 'Ollama (Local)',   color: 'text-emerald-400', desc: 'Runs on your machine' },
 }
 
 function Dashboard() {
@@ -28,7 +27,7 @@ function Dashboard() {
   const { data: health } = useQuery({
     queryKey: ['health'],
     queryFn: async () => {
-      const res = await fetch('http://localhost:8000/api/health')
+      const res = await fetch(`http://${window.location.hostname}:8000/api/health`)
       return res.json()
     }
   })
@@ -36,7 +35,7 @@ function Dashboard() {
   const { data: papersData } = useQuery({
     queryKey: ['papers'],
     queryFn: async () => {
-      const res = await fetch('http://localhost:8000/api/papers')
+      const res = await fetch(`http://${window.location.hostname}:8000/api/papers`)
       return res.json()
     }
   })
@@ -44,7 +43,7 @@ function Dashboard() {
   const { data: providersData, isLoading: providersLoading } = useQuery({
     queryKey: ['providers'],
     queryFn: async () => {
-      const res = await fetch('http://localhost:8000/api/providers')
+      const res = await fetch(`http://${window.location.hostname}:8000/api/providers`)
       return res.json() as Promise<ProvidersResponse>
     }
   })
@@ -58,7 +57,7 @@ function Dashboard() {
 
   const switchMutation = useMutation({
     mutationFn: async ({ provider, model }: { provider: string; model: string }) => {
-      const res = await fetch('http://localhost:8000/api/set-model-config', {
+      const res = await fetch(`http://${window.location.hostname}:8000/api/set-model-config`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ provider, model_name: model })
@@ -79,7 +78,7 @@ function Dashboard() {
     mutationFn: async (file: File) => {
       const formData = new FormData()
       formData.append('file', file)
-      const res = await fetch('http://localhost:8000/api/upload', {
+      const res = await fetch(`http://${window.location.hostname}:8000/api/upload`, {
         method: 'POST',
         body: formData
       })
@@ -120,7 +119,7 @@ function Dashboard() {
           ) : (
             <div className="grid gap-4 md:grid-cols-2">
               {Object.entries(providers).map(([name, info]) => {
-                const meta = PROVIDER_META[name] || PROVIDER_META.ollama
+                const meta = PROVIDER_META[name] || PROVIDER_META.gemini
                 const Icon = meta.icon
                 const isActive = name === activeProvider
                 const isAvailable = info.available

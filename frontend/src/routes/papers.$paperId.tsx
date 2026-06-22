@@ -15,7 +15,7 @@ function PaperRoute() {
     queryKey: ['paper', paperId],
     queryFn: async () => {
       // In a real app we'd have a specific GET endpoint, but we can fetch all and filter
-      const res = await fetch(`http://localhost:8000/api/papers`)
+      const res = await fetch(`http://${window.location.hostname}:8000/api/papers`)
       const data = await res.json()
       return data.papers.find((p: any) => p.id === paperId)
     }
@@ -23,7 +23,7 @@ function PaperRoute() {
 
   const summarizeMutation = useMutation({
     mutationFn: async () => {
-      const res = await fetch(`http://localhost:8000/api/summarize`, {
+      const res = await fetch(`http://${window.location.hostname}:8000/api/summarize`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ paper_id: paperId })

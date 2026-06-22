@@ -11,9 +11,10 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from pypdf import PdfReader
 import requests
-import math
-from collections import Counter
 from dotenv import load_dotenv
+import faiss
+from sentence_transformers import SentenceTransformer
+from numpy.linalg import norm
 
 # Load API keys from .env
 load_dotenv()
@@ -27,40 +28,7 @@ from research import (
     COMPARE_PAPERS_PROMPT, DRAFT_SECTION_PROMPT,
 )
 
-class TfidfVectorizer:
-    def __init__(self, max_features=1000, stop_words='english'):
-        self.vocab = {}
-        self.idf = {}
-        
-    def _tokenize(self, text):
-        return [w.lower() for w in ''.join(c if c.isalnum() else ' ' for c in text).split() if len(w) > 2]
-        
-    def fit(self, docs):
-        df = Counter()
-        for d in docs:
-            tokens = self._tokenize(d)
-            for w in set(tokens):
-                df[w] += 1
-        N = len(docs)
-        for w, count in df.items():
-            self.idf[w] = math.log((N + 1) / (count + 1)) + 1
-        self.vocab = {w: i for i, w in enumerate(self.idf.keys())}
-        
-    def transform(self, docs):
-        out = np.zeros((len(docs), len(self.vocab)), dtype=np.float32)
-        for i, d in enumerate(docs):
-            tokens = self._tokenize(d)
-            counts = Counter(tokens)
-            for w, c in counts.items():
-                if w in self.vocab:
-                    out[i, self.vocab[w]] = c * self.idf[w]
-        norms = np.linalg.norm(out, axis=1, keepdims=True)
-        norms[norms == 0] = 1
-        return out / norms
-        
-    def fit_transform(self, docs):
-        self.fit(docs)
-        return self.transform(docs)
+
 
 app = FastAPI(title="Research Scholar Agent API")
 
@@ -84,86 +52,136 @@ registry = ProviderRegistry()
 
 class RAGSystem:
     def __init__(self):
-        self.vectorizer = None
-        self.vectors = None
+        print("Loading SentenceTransformer model...")
+        self.encoder = SentenceTransformer("all-MiniLM-L6-v2")
+        self.embedding_dim = self.encoder.get_sentence_embedding_dimension()
+        self.index = faiss.IndexFlatL2(self.embedding_dim)
         self.chunks = []
         self.chunk_metadata = []
-        self.meta_path = "faiss_meta.json"
+        self.meta_path = os.path.join(FAISS_DIR, "faiss_meta.json")
+        self.index_path = os.path.join(FAISS_DIR, "faiss_index.bin")
         self.load_index()
         
     def load_index(self):
-        if os.path.exists(self.meta_path):
+        if os.path.exists(self.meta_path) and os.path.exists(self.index_path):
             try:
                 with open(self.meta_path, "r", encoding="utf-8") as f:
                     data = json.load(f)
                     self.chunks = data["chunks"]
                     self.chunk_metadata = data["metadata"]
-                
-                if len(self.chunks) > 0:
-                    self.vectorizer = TfidfVectorizer(max_features=1000, stop_words='english')
-                    self.vectors = self.vectorizer.fit_transform(self.chunks).astype(np.float32)
+                self.index = faiss.read_index(self.index_path)
+                print(f"Loaded FAISS index with {self.index.ntotal} vectors.")
             except Exception as e:
                 print(f"Error loading index: {e}")
-                self.vectorizer = None
-                self.vectors = None
-                self.chunks = []
-                self.chunk_metadata = []
+                self.rebuild_index_from_papers()
+        else:
+            print("Index files missing. Rebuilding index from papers directory...")
+            self.rebuild_index_from_papers()
+
+    def rebuild_index_from_papers(self):
+        try:
+            self.index = faiss.IndexFlatL2(self.embedding_dim)
+            self.chunks = []
+            self.chunk_metadata = []
+            
+            meta_files = glob.glob(os.path.join(PAPERS_DIR, "*.meta.json"))
+            for meta_file in meta_files:
+                paper_id = os.path.basename(meta_file).replace(".meta.json", "")
+                text_path = os.path.join(PAPERS_DIR, f"{paper_id}.txt")
+                if os.path.exists(text_path):
+                    with open(meta_file, "r", encoding="utf-8") as f:
+                        meta = json.load(f)
+                    with open(text_path, "r", encoding="utf-8") as f:
+                        text = f.read()
+                    
+                    filename = meta.get("filename", meta.get("title", f"{paper_id}.pdf"))
+                    paragraphs = [p.strip() for p in text.split("\n\n") if len(p.strip()) > 50]
+                    if not paragraphs:
+                        paragraphs = [p.strip() for p in text.split("\n") if len(p.strip()) > 50]
+                    if not paragraphs:
+                        paragraphs = [text[i:i+1000] for i in range(0, len(text), 800) if len(text[i:i+1000].strip()) > 50]
+                    
+                    if paragraphs:
+                        embeddings = self.encoder.encode(paragraphs, convert_to_numpy=True)
+                        self.index.add(embeddings)
+                        self.chunks.extend(paragraphs)
+                        for p in paragraphs:
+                            self.chunk_metadata.append({"paper_id": paper_id, "paper_name": filename, "text": p})
+            
+            if len(self.chunks) > 0:
+                self.save_index()
+                print(f"Successfully rebuilt FAISS index with {self.index.ntotal} vectors from papers.")
+            else:
+                print("No papers found in papers/ directory to index.")
+        except Exception as e:
+            print(f"Error rebuilding index: {e}")
 
     def save_index(self):
         with open(self.meta_path, "w", encoding="utf-8") as f:
             json.dump({"chunks": self.chunks, "metadata": self.chunk_metadata}, f)
+        faiss.write_index(self.index, self.index_path)
 
     def add_document(self, paper_id: str, paper_name: str, text: str):
-        # Split on double-newlines first (natural paragraphs)
         paragraphs = [p.strip() for p in text.split("\n\n") if len(p.strip()) > 50]
         if not paragraphs:
-            # Fallback: split on single newlines
             paragraphs = [p.strip() for p in text.split("\n") if len(p.strip()) > 50]
         if not paragraphs:
-            # Last resort: fixed-size chunks with overlap
             paragraphs = [text[i:i+1000] for i in range(0, len(text), 800) if len(text[i:i+1000].strip()) > 50]
         if not paragraphs: return
+        
+        embeddings = self.encoder.encode(paragraphs, convert_to_numpy=True)
+        self.index.add(embeddings)
         self.chunks.extend(paragraphs)
         for p in paragraphs:
             self.chunk_metadata.append({"paper_id": paper_id, "paper_name": paper_name, "text": p})
             
-        self.vectorizer = TfidfVectorizer(max_features=1000, stop_words='english')
-        self.vectors = self.vectorizer.fit_transform(self.chunks).astype(np.float32)
         self.save_index()
 
-    def search(self, query: str, top_k: int = 3):
-        if self.vectorizer is None or len(self.chunks) == 0:
+    def search(self, query: str, top_k: int = 3, paper_id: Optional[str] = None):
+        if self.index.ntotal == 0:
             return []
-        query_vec = self.vectorizer.transform([query]).astype(np.float32)
-        scores = np.dot(self.vectors, query_vec.T).flatten()
-        top_indices = scores.argsort()[-top_k:][::-1]
+        search_k = min(50, self.index.ntotal) if paper_id else top_k
+        query_vec = self.encoder.encode([query], convert_to_numpy=True)
+        distances, indices = self.index.search(query_vec, search_k)
         
         results = []
-        for idx in top_indices:
-            if scores[idx] > 0:
-                results.append(self.chunk_metadata[idx])
+        for dist, idx in zip(distances[0], indices[0]):
+            if idx != -1:
+                meta = self.chunk_metadata[idx]
+                if paper_id and meta.get("paper_id") != paper_id:
+                    continue
+                results.append(meta)
+                if len(results) == top_k:
+                    break
         return results
 
 rag_system = RAGSystem()
 
 def extract_summary_tfidf(text: str, num_sentences: int = 15) -> str:
-    """Fallback extractive summarization to keep LLM context small"""
+    """Extractive summarization using SentenceTransformers to keep LLM context small"""
     try:
         sentences = [s.strip() for s in text.replace('!', '.').replace('?', '.').split('.') if len(s.strip()) > 20]
         if len(sentences) <= num_sentences:
             return text
             
-        vectorizer = TfidfVectorizer(stop_words='english')
-        tfidf_matrix = vectorizer.fit_transform(sentences)
-        scores = np.array(tfidf_matrix.sum(axis=1)).flatten()
+        # Get embeddings for all sentences
+        sentence_embeddings = rag_system.encoder.encode(sentences, convert_to_numpy=True)
         
-        top_indices = scores.argsort()[-num_sentences:][::-1]
-        top_indices.sort()
+        # Document embedding is the mean of sentence embeddings
+        doc_embedding = np.mean(sentence_embeddings, axis=0)
+        
+        # Calculate cosine similarities
+        similarities = np.dot(sentence_embeddings, doc_embedding) / (norm(sentence_embeddings, axis=1) * norm(doc_embedding))
+        
+        # Get top N indices
+        top_indices = similarities.argsort()[-num_sentences:][::-1]
+        top_indices.sort() # keep original order
         
         return ". ".join([sentences[i] for i in top_indices]) + "."
     except Exception as e:
-        print(f"TF-IDF Summarization failed: {e}")
-        return text[:6000]
+        print(f"SentenceTransformer Summarization failed: {e}")
+        sentences = [s.strip() for s in text.replace('!', '.').replace('?', '.').split('.') if len(s.strip()) > 20]
+        return ". ".join(sentences[:num_sentences]) + "."
 
 
 # ──────────────────────────────────────────────
@@ -206,6 +224,7 @@ class ModelConfigRequest(BaseModel):
 
 class ChatRequest(BaseModel):
     message: str
+    paper_id: Optional[str] = None
 
 class SummarizeRequest(BaseModel):
     paper_id: str
@@ -215,6 +234,7 @@ class SearchRequest(BaseModel):
     max_results: int = 10
     sort_by: str = "relevance"
     year_range: str = ""
+    publisher: str = ""
 
 class ImportPaperRequest(BaseModel):
     arxiv_id: str  # Can be an ID like "2301.00001" or a full URL
@@ -319,6 +339,9 @@ def summarize_paper(req: SummarizeRequest):
     try:
         res_text = registry.generate(prompt, json_mode=True)
 
+        if res_text.startswith("[Error]"):
+            raise Exception(res_text)
+
         json_match = re.search(r'\{.*\}', res_text, re.DOTALL)
         if json_match:
             clean_json = json_match.group(0)
@@ -353,7 +376,7 @@ def search_semantic_scholar_endpoint(req: SearchRequest):
 
 @app.post("/api/search/crossref")
 def search_crossref_endpoint(req: SearchRequest):
-    results = search_crossref(req.query, max_results=req.max_results, year_range=req.year_range)
+    results = search_crossref(req.query, max_results=req.max_results, year_range=req.year_range, publisher=req.publisher)
     return {"results": results, "source": "crossref", "query": req.query}
 
 @app.post("/api/import-paper")
@@ -423,8 +446,8 @@ def import_paper(req: ImportPaperRequest):
 @app.post("/api/generate-review")
 def generate_review(req: GenerateReviewRequest):
     """Generate a literature review from selected papers."""
-    if len(req.paper_ids) < 2:
-        raise HTTPException(status_code=400, detail="Need at least 2 papers for a literature review")
+    if len(req.paper_ids) < 1:
+        raise HTTPException(status_code=400, detail="Need at least 1 paper for a literature review")
 
     # Load all paper data
     papers_data = []
@@ -436,7 +459,7 @@ def generate_review(req: GenerateReviewRequest):
         else:
             missing.append(pid)
 
-    if len(papers_data) < 2:
+    if len(papers_data) < 1:
         raise HTTPException(status_code=400, detail=f"Could not load enough papers. Missing: {missing}")
 
     # Build the summaries text
@@ -467,8 +490,8 @@ def generate_review(req: GenerateReviewRequest):
 @app.post("/api/gap-analysis")
 def gap_analysis(req: GapAnalysisRequest):
     """Analyze research gaps across selected papers."""
-    if len(req.paper_ids) < 2:
-        raise HTTPException(status_code=400, detail="Need at least 2 papers for gap analysis")
+    if len(req.paper_ids) < 1:
+        raise HTTPException(status_code=400, detail="Need at least 1 paper for gap analysis")
 
     papers_data = []
     for pid in req.paper_ids:
@@ -476,7 +499,7 @@ def gap_analysis(req: GapAnalysisRequest):
         if data:
             papers_data.append(data)
 
-    if len(papers_data) < 2:
+    if len(papers_data) < 1:
         raise HTTPException(status_code=400, detail="Could not load enough papers")
 
     summaries_text = build_paper_summaries_text(papers_data)
@@ -489,6 +512,9 @@ def gap_analysis(req: GapAnalysisRequest):
 
     try:
         res_text = registry.generate(prompt, json_mode=True)
+
+        if res_text.startswith("[Error]"):
+            raise Exception(res_text)
 
         json_match = re.search(r'\{.*\}', res_text, re.DOTALL)
         if json_match:
@@ -530,6 +556,10 @@ def compare_papers(req: ComparePapersRequest):
 
     try:
         res_text = registry.generate(prompt, json_mode=True)
+        
+        if res_text.startswith("[Error]"):
+            raise Exception(res_text)
+
         json_match = re.search(r'\[.*\]', res_text, re.DOTALL)
         if json_match:
             clean_json = json_match.group(0)
@@ -577,7 +607,7 @@ def draft_section(req: DraftSectionRequest):
 
 @app.post("/api/chat")
 async def chat(req: ChatRequest):
-    context_chunks = rag_system.search(req.message, top_k=3)
+    context_chunks = rag_system.search(req.message, top_k=3, paper_id=req.paper_id)
     context = "\n".join([c['text'] for c in context_chunks])
     context = context[:4000]
     
@@ -605,3 +635,67 @@ async def chat(req: ChatRequest):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
+
+
+@app.get("/")
+def root():
+    return {
+        "name": "Research Scholar Agent API",
+        "version": "2.0",
+        "status": "running",
+        "docs": "/docs",
+        "active_provider": registry.active_provider_name,
+        "active_model": registry.active_model,
+    }
+
+@app.delete("/api/papers/{paper_id}")
+def delete_paper(paper_id: str):
+    """Delete a paper and all its associated files from the library."""
+    meta_path = os.path.join(PAPERS_DIR, f"{paper_id}.meta.json")
+    if not os.path.exists(meta_path):
+        raise HTTPException(status_code=404, detail="Paper not found")
+
+    # Delete all associated files
+    extensions = [".pdf", ".txt", ".meta.json", ".summary.json"]
+    for ext in extensions:
+        fpath = os.path.join(PAPERS_DIR, f"{paper_id}{ext}")
+        if os.path.exists(fpath):
+            os.remove(fpath)
+
+    # Remove from RAG index
+    new_chunks = []
+    new_meta = []
+    for chunk, meta in zip(rag_system.chunks, rag_system.chunk_metadata):
+        if meta.get("paper_id") != paper_id:
+            new_chunks.append(chunk)
+            new_meta.append(meta)
+    rag_system.chunks = new_chunks
+    rag_system.chunk_metadata = new_meta
+
+    rag_system.index = faiss.IndexFlatL2(rag_system.embedding_dim)
+    if len(rag_system.chunks) > 0:
+        embeddings = rag_system.encoder.encode(rag_system.chunks, convert_to_numpy=True)
+        rag_system.index.add(embeddings)
+    rag_system.save_index()
+
+    return {"status": "deleted", "paper_id": paper_id}
+
+@app.post("/api/test-provider")
+def test_provider():
+    """Quick health check against the active LLM provider."""
+    try:
+        result = registry.generate("Respond with exactly: OK", system="You are a test assistant. Respond with only the word OK.")
+        is_ok = "OK" in result.upper() and "[Error]" not in result
+        return {
+            "status": "ok" if is_ok else "error",
+            "provider": registry.active_provider_name,
+            "model": registry.active_model,
+            "response": result[:200],
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "provider": registry.active_provider_name,
+            "model": registry.active_model,
+            "response": str(e),
+        }

@@ -33,18 +33,18 @@ function ReviewRoute() {
   const { data: papersData, isLoading: papersLoading } = useQuery({
     queryKey: ['papers'],
     queryFn: async () => {
-      const res = await fetch('http://localhost:8000/api/papers')
+      const res = await fetch(`http://${window.location.hostname}:8000/api/papers`)
       return res.json()
     }
   })
 
   const reviewMutation = useMutation({
     mutationFn: async () => {
-      const res = await fetch('http://localhost:8000/api/generate-review', {
+      const res = await fetch(`http://${window.location.hostname}:8000/api/generate-review`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          topic,
+          topic: topic.trim() || 'General Research Summary',
           paper_ids: Array.from(selectedPapers),
         })
       })
@@ -57,11 +57,11 @@ function ReviewRoute() {
 
   const gapsMutation = useMutation({
     mutationFn: async () => {
-      const res = await fetch('http://localhost:8000/api/gap-analysis', {
+      const res = await fetch(`http://${window.location.hostname}:8000/api/gap-analysis`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          topic,
+          topic: topic.trim() || 'General Research Summary',
           paper_ids: Array.from(selectedPapers),
         })
       })
@@ -93,7 +93,7 @@ function ReviewRoute() {
   }
 
   const papers: Paper[] = papersData?.papers || []
-  const canGenerate = topic.trim() && selectedPapers.size >= 2
+  const canGenerate = selectedPapers.size >= 1
 
   const GAP_ICONS: Record<string, typeof Lightbulb> = {
     'Unexplored Methods': Beaker,
@@ -202,8 +202,8 @@ function ReviewRoute() {
                 Find Gaps
               </Button>
             </div>
-            {!canGenerate && topic.trim() && (
-              <p className="text-xs text-amber-500 mt-2">Select at least 2 papers to generate.</p>
+            {!canGenerate && (
+              <p className="text-xs text-amber-500 mt-2">Select at least 1 paper to generate.</p>
             )}
           </CardContent>
         </Card>

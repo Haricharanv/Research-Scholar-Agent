@@ -4,6 +4,8 @@ Paper discovery (arXiv, Semantic Scholar), literature review generation,
 and research gap analysis.
 """
 
+import os
+import time
 import re
 import json
 import requests
@@ -107,12 +109,34 @@ def search_semantic_scholar(query: str, max_results: int = 10, year_range: str =
     if year_range:
         params["year"] = year_range  # e.g., "2020-2024"
 
-    try:
-        resp = requests.get(f"{SEMANTIC_SCHOLAR_API}/paper/search", params=params, timeout=15)
-        resp.raise_for_status()
-        data = resp.json()
-    except Exception as e:
-        return [{"error": f"Semantic Scholar API error: {str(e)}"}]
+    headers = {}
+    api_key = os.getenv("SEMANTIC_SCHOLAR_API_KEY")
+    if api_key:
+        headers["x-api-key"] = api_key
+
+    max_retries = 3
+    data = {}
+    for attempt in range(max_retries):
+        try:
+            resp = requests.get(f"{SEMANTIC_SCHOLAR_API}/paper/search", params=params, headers=headers, timeout=15)
+            if resp.status_code == 429:
+                if attempt < max_retries - 1:
+                    wait_time = 2 ** attempt
+                    time.sleep(wait_time)
+                    continue
+                else:
+                    return [{
+                        "error": "Semantic Scholar API Rate Limit (429). Please add SEMANTIC_SCHOLAR_API_KEY to your backend .env file to bypass rate limits."
+                    }]
+            resp.raise_for_status()
+            data = resp.json()
+            break
+        except requests.exceptions.HTTPError as e:
+            if attempt == max_retries - 1:
+                return [{"error": f"Semantic Scholar HTTP error: {str(e)}"}]
+        except Exception as e:
+            if attempt == max_retries - 1:
+                return [{"error": f"Semantic Scholar API error: {str(e)}"}]
 
     results = []
     for paper in data.get("data", []):
@@ -151,7 +175,7 @@ def search_semantic_scholar(query: str, max_results: int = 10, year_range: str =
 CROSSREF_API = "https://api.crossref.org/works"
 
 
-def search_crossref(query: str, max_results: int = 10, year_range: str = "") -> List[Dict[str, Any]]:
+def search_crossref(query: str, max_results: int = 10, year_range: str = "", publisher: str = "") -> List[Dict[str, Any]]:
     """Search CrossRef for papers from IEEE, ACM, Springer, Elsevier, and all major publishers."""
     params = {
         "query": query,
@@ -160,10 +184,24 @@ def search_crossref(query: str, max_results: int = 10, year_range: str = "") -> 
         "sort": "relevance",
         "order": "desc",
     }
+    
+    filters = []
     if year_range:
         parts = year_range.split("-")
         if len(parts) == 2:
-            params["filter"] = f"from-pub-date:{parts[0]},until-pub-date:{parts[1]}"
+            filters.append(f"from-pub-date:{parts[0]},until-pub-date:{parts[1]}")
+
+    if publisher:
+        pub = publisher.lower()
+        if pub == "ieee":
+            filters.append("prefix:10.1109")
+        elif pub == "acm":
+            filters.append("prefix:10.1145")
+        elif pub == "springer":
+            filters.append("prefix:10.1007")
+
+    if filters:
+        params["filter"] = ",".join(filters)
 
     headers = {
         "User-Agent": "AcademicCompass/1.0 (mailto:research@academiccompass.app)",

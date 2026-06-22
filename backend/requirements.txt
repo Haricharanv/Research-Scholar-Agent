@@ -6,7 +6,6 @@ requests
 faiss-cpu
 scikit-learn
 pypdf
-bert-extractive-summarizer
 numpy
 pandas
 scipy
@@ -14,3 +13,4 @@ torch
 sentencepiece
 transformers
 python-dotenv
+sentence-transformers

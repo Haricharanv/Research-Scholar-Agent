@@ -36,14 +36,14 @@ function CompareRoute() {
   const { data: papersData, isLoading: papersLoading } = useQuery({
     queryKey: ['papers'],
     queryFn: async () => {
-      const res = await fetch('http://localhost:8000/api/papers')
+      const res = await fetch(`http://${window.location.hostname}:8000/api/papers`)
       return res.json()
     }
   })
 
   const compareMutation = useMutation({
     mutationFn: async () => {
-      const res = await fetch('http://localhost:8000/api/compare-papers', {
+      const res = await fetch(`http://${window.location.hostname}:8000/api/compare-papers`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

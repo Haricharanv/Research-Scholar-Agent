@@ -29,7 +29,7 @@ type PaperResult = {
 function DiscoverRoute() {
   const [query, setQuery] = useState('')
   const [results, setResults] = useState<PaperResult[]>([])
-  const [activeSource, setActiveSource] = useState<'arxiv' | 'semantic-scholar' | 'crossref'>('arxiv')
+  const [activeSource, setActiveSource] = useState<'arxiv' | 'ieee' | 'acm' | 'springer' | 'crossref'>('arxiv')
   const [importing, setImporting] = useState<Set<string>>(new Set())
   const [imported, setImported] = useState<Set<string>>(new Set())
   const [searchError, setSearchError] = useState<string | null>(null)
@@ -37,10 +37,12 @@ function DiscoverRoute() {
 
   const searchMutation = useMutation({
     mutationFn: async ({ source, searchQuery }: { source: string; searchQuery: string }) => {
-      const res = await fetch(`http://localhost:8000/api/search/${source}`, {
+      const apiSource = ['ieee', 'acm', 'springer'].includes(source) ? 'crossref' : source
+      const publisher = ['ieee', 'acm', 'springer'].includes(source) ? source : ''
+      const res = await fetch(`http://${window.location.hostname}:8000/api/search/${apiSource}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query: searchQuery, max_results: 15 })
+        body: JSON.stringify({ query: searchQuery, max_results: 15, publisher })
       })
       return res.json()
     },
@@ -70,7 +72,7 @@ function DiscoverRoute() {
     setImporting(prev => new Set(prev).add(importId))
     
     try {
-      const res = await fetch('http://localhost:8000/api/import-paper', {
+      const res = await fetch(`http://${window.location.hostname}:8000/api/import-paper`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ arxiv_id: paper.arxiv_id })
@@ -95,13 +97,13 @@ function DiscoverRoute() {
     <div className="space-y-6">
       <div>
         <h1 className="text-3xl font-bold tracking-tight">Discover Papers</h1>
-        <p className="text-muted-foreground">Search arXiv and Semantic Scholar for research papers on any topic.</p>
+        <p className="text-muted-foreground">Search arXiv and CrossRef for research papers on any topic.</p>
       </div>
 
       {/* Search Bar */}
       <Card>
         <CardContent className="pt-6">
-          <div className="flex gap-2 mb-4">
+          <div className="flex flex-wrap gap-2 mb-4">
             <button
               onClick={() => setActiveSource('arxiv')}
               className={`flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-medium transition-all ${
@@ -113,14 +115,34 @@ function DiscoverRoute() {
               <BookOpen className="w-4 h-4" /> arXiv
             </button>
             <button
-              onClick={() => setActiveSource('semantic-scholar')}
+              onClick={() => setActiveSource('ieee')}
               className={`flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-medium transition-all ${
-                activeSource === 'semantic-scholar'
+                activeSource === 'ieee'
                   ? 'bg-primary text-primary-foreground shadow-sm'
                   : 'bg-muted text-muted-foreground hover:text-foreground'
               }`}
             >
-              <Globe2 className="w-4 h-4" /> Semantic Scholar
+              <Library className="w-4 h-4" /> IEEE
+            </button>
+            <button
+              onClick={() => setActiveSource('acm')}
+              className={`flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-medium transition-all ${
+                activeSource === 'acm'
+                  ? 'bg-primary text-primary-foreground shadow-sm'
+                  : 'bg-muted text-muted-foreground hover:text-foreground'
+              }`}
+            >
+              <Library className="w-4 h-4" /> ACM
+            </button>
+            <button
+              onClick={() => setActiveSource('springer')}
+              className={`flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-medium transition-all ${
+                activeSource === 'springer'
+                  ? 'bg-primary text-primary-foreground shadow-sm'
+                  : 'bg-muted text-muted-foreground hover:text-foreground'
+              }`}
+            >
+              <Library className="w-4 h-4" /> Springer
             </button>
             <button
               onClick={() => setActiveSource('crossref')}
@@ -130,7 +152,7 @@ function DiscoverRoute() {
                   : 'bg-muted text-muted-foreground hover:text-foreground'
               }`}
             >
-              <Library className="w-4 h-4" /> CrossRef (IEEE, ACM, Springer)
+              <Globe2 className="w-4 h-4" /> CrossRef (All)
             </button>
           </div>
           <form onSubmit={(e) => { e.preventDefault(); handleSearch() }} className="flex gap-2">
@@ -152,7 +174,12 @@ function DiscoverRoute() {
       {searchMutation.isPending && (
         <div className="text-center py-12 text-muted-foreground">
           <Loader2 className="w-8 h-8 animate-spin mx-auto mb-4" />
-          <p>Searching {activeSource === 'arxiv' ? 'arXiv' : activeSource === 'crossref' ? 'CrossRef' : 'Semantic Scholar'}...</p>
+          <p>Searching {
+            activeSource === 'arxiv' ? 'arXiv' :
+            activeSource === 'ieee' ? 'IEEE' :
+            activeSource === 'acm' ? 'ACM' :
+            activeSource === 'springer' ? 'Springer' : 'CrossRef'
+          }...</p>
         </div>
       )}
 
