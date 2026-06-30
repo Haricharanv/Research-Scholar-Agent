@@ -70,8 +70,3 @@ If sharing this repository:
     ```
     *(The frontend will run on `http://localhost:5173`)*
 
----
-
-## 📖 Presentation Demo Guide
-
-If you are presenting this project for an evaluation or demo, please refer to the detailed, step-by-step presentation script in [DEMO_GUIDE.md](../DEMO_GUIDE.md) at the root folder of this project!
